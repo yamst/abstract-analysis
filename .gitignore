@@ -1,0 +1,10 @@
+__pycache__/
+*.py[cod]
+*$py.class
+
+*.csv
+*.xlsx
+CLAUDE.md
+
+hgnc_full.txt
+venn_diagrams.png
