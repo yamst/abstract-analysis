@@ -9,9 +9,36 @@ __pycache__/
 *.py[cod]
 *$py.class
 
-*.csv
-*.xlsx
-CLAUDE.md
-
-hgnc_full.txt
+# Output files (regenerate by running scanner.py)
+model_organisms_dataset.csv
+passing_abstracts*.csv
+consolidated_gene_table.csv
+gene_tissue_table.csv
+summary_stats.csv
+abstracts_*.txt
+shared_genes_summary.txt
+*_venn.png
 venn_diagrams.png
+gene_report.xlsx
+
+# Diagnostic/debug scripts moved to tools/
+# (kept in repo for troubleshooting)
+
+# Analysis files generated during development
+classification_analysis.md
+expert_classification_questions.md
+
+# Ollama portable install (user installs separately)
+ollama/
+ollama-windows.zip
+
+# Model weights (user pulls via Ollama)
+models/
+ollama-models/
+
+# Backup files
+*.bak
+*.test_bak
+
+# hgnc gene list (auto-downloaded on first run)
+# hgnc_full.txt
