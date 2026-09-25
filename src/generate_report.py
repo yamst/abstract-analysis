@@ -1,4 +1,5 @@
 import re
+import os
 import pandas as pd
 import matplotlib
 matplotlib.use("Agg")
@@ -7,7 +8,10 @@ import matplotlib.patches as mpatches
 from matplotlib_venn import venn2
 from collections import defaultdict
 
-df = pd.read_csv("model_organisms_dataset.csv", low_memory=False)
+# Output directory
+_OUTPUT_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "output")
+
+df = pd.read_csv(os.path.join(_OUTPUT_DIR, "model_organisms_dataset.csv"), low_memory=False)
 
 DISORDER_ORDER = [
     "Schizophrenia", "Bipolar Disorder", "Autism", "ADHD",
@@ -126,7 +130,7 @@ def row_tissue(r):
         return "Gut"
 gene_table["overall_tissue"] = gene_table.apply(row_tissue, axis=1)
 
-gene_table.to_csv("consolidated_gene_table.csv", index=False)
+gene_table.to_csv(os.path.join(_OUTPUT_DIR, "consolidated_gene_table.csv"), index=False)
 print(f"Saved consolidated_gene_table.csv — {len(gene_table):,} rows, "
       f"{gene_table['gene'].nunique()} unique genes")
 
@@ -154,7 +158,7 @@ for disorder in DISORDER_ORDER:
     })
 
 summary = pd.DataFrame(summary_rows)
-summary.to_csv("summary_stats.csv", index=False)
+summary.to_csv(os.path.join(_OUTPUT_DIR, "summary_stats.csv"), index=False)
 print(f"Saved summary_stats.csv")
 print(summary[["disorder","brain_abstracts","gut_abstracts","brain_genes","gut_genes","shared_genes"]].to_string(index=False))
 
@@ -181,7 +185,7 @@ legend_rows.append({
 })
 legend_df = pd.DataFrame(legend_rows)
 
-with pd.ExcelWriter("gene_report.xlsx", engine="openpyxl") as writer:
+with pd.ExcelWriter(os.path.join(_OUTPUT_DIR, "gene_report.xlsx"), engine="openpyxl") as writer:
     gene_table.to_excel(writer, sheet_name="Genes", index=False)
     legend_df.to_excel(writer, sheet_name="Summary", index=False)
 print("Saved gene_report.xlsx")
@@ -242,5 +246,5 @@ for j in range(n_disorders + 1, len(axes)):
 fig.suptitle("Brain vs Gut Gene Overlap by Disorder\n(genes expressed in disorder models, 2000–2026)",
              fontsize=14, fontweight="bold", y=1.01)
 plt.tight_layout()
-fig.savefig("venn_diagrams.png", dpi=150, bbox_inches="tight")
+fig.savefig(os.path.join(_OUTPUT_DIR, "venn_diagrams.png"), dpi=150, bbox_inches="tight")
 print("Saved venn_diagrams.png")

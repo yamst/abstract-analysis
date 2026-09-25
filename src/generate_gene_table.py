@@ -1,7 +1,11 @@
 import re
+import os
 import pandas as pd
 
-df = pd.read_csv("model_organisms_dataset.csv")
+# Output directory
+_OUTPUT_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "output")
+
+df = pd.read_csv(os.path.join(_OUTPUT_DIR, "model_organisms_dataset.csv"))
 
 def first_sentence(text):
     if not isinstance(text, str):
@@ -47,6 +51,6 @@ for _, row in df.iterrows():
 result = pd.DataFrame(rows).drop_duplicates()
 result = result.sort_values(["disorder", "tissue", "gene", "subject"]).reset_index(drop=True)
 
-result.to_csv("gene_tissue_table.csv", index=False)
+result.to_csv(os.path.join(_OUTPUT_DIR, "gene_tissue_table.csv"), index=False)
 print(f"Saved gene_tissue_table.csv — {len(result):,} rows, {result['gene'].nunique()} unique genes")
 print(result.head(10).to_string(index=False))

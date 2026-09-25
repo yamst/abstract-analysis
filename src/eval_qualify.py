@@ -21,6 +21,7 @@ would otherwise run). Only llm_qualify is imported, to run the new gate live.
 """
 
 import sys
+import os
 import argparse
 from collections import Counter
 
@@ -31,6 +32,9 @@ try:
 except ImportError as e:
     print(f"llm_qualify import failed ({e}); install httpx and run the LLM server first.")
     sys.exit(1)
+
+# Output directory
+_OUTPUT_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "output")
 
 
 def parse_genes(cell):
@@ -56,7 +60,9 @@ def _strat_sample(df_sub, n_per_disorder):
     return pd.concat(parts)
 
 
-def sample_gold(n, src="model_organisms_dataset.csv", out="gold_labels.csv"):
+def sample_gold(n, src=None, out="gold_labels.csv"):
+    if src is None:
+        src = os.path.join(_OUTPUT_DIR, "model_organisms_dataset.csv")
     try:
         df = pd.read_csv(src, low_memory=False)
     except FileNotFoundError:
@@ -116,7 +122,9 @@ def _print_metrics(name, preds, labels):
     return m, k
 
 
-def run_eval(gold="gold_labels.csv"):
+def run_eval(gold=None):
+    if gold is None:
+        gold = "gold_labels.csv"  # In project root for hand-editing
     try:
         df = pd.read_csv(gold, dtype=str)
     except FileNotFoundError:

@@ -20,7 +20,7 @@ Schizophrenia, Bipolar, Autism, ADHD, Major Depression, Anxiety, PTSD, OCD, Alzh
 Install Python dependencies:
 
 ```bash
-pip install biopython pandas matplotlib matplotlib-venn openpyxl httpx
+pip install -r requirements.txt
 ```
 
 ### 🔑 Set NCBI API Key (Recommended)
@@ -34,22 +34,26 @@ set NCBI_API_KEY=your_key_here
 ### ▶️ Run the Pipeline
 
 ```bash
-python scanner.py              # Fetch PubMed + filter + classify
-python generate_report.py      # Generate summary and Venn diagrams
-python generate_gene_table.py # Generate consolidated gene table
+python src/scanner.py              # Fetch PubMed + filter + classify
+python src/generate_report.py      # Generate summary and Venn diagrams
+python src/generate_gene_table.py # Generate consolidated gene table
 ```
+
+All outputs are saved to `output/`.
 
 ### 🤖 Optional: LLM Qualification Gate
 
 To use the local LLM qualification gate (hybrid approach):
 
 ```bash
-python install_llm.py          # One-click setup: downloads Ollama + model
-set USE_LLM_QUALIFIER=1        # Enable LLM gate
-python scanner.py
+python setup/install_llm.py          # One-click setup: downloads Ollama + model
+set USE_LLM_QUALIFIER=1              # Enable LLM gate
+python src/scanner.py
 ```
 
 ## 📁 Output Files
+
+All outputs are in `output/`:
 
 | File | Description |
 |------|-------------|
@@ -58,6 +62,7 @@ python scanner.py
 | `consolidated_gene_table.csv` | Gene counts by disorder |
 | `gene_report.xlsx` | Excel workbook with all results |
 | `venn_diagrams.png` | Brain/gut gene overlap per disorder |
+| `abstracts_*_genes_context.txt` | Full abstracts by gene category |
 
 ## 🔧 Configuration
 
@@ -74,15 +79,36 @@ Environment variables:
 ## 📂 Project Structure
 
 ```
-├── scanner.py           # Core pipeline (~2100 lines)
-├── scanner_debug.py     # Fast smoke test (20 abstracts)
-├── llm_qualify.py       # LLM client with SQLite cache
-├── eval_qualify.py      # Accuracy evaluation vs hand labels
-├── install_llm.py       # One-click LLM setup for Windows
-├── generate_report.py   # Post-processing
-├── generate_gene_table.py
-├── Modelfile            # Ollama model configuration
-└── tools/               # Diagnostic and benchmark scripts
+abstract-analysis/
+├── README.md
+├── CLAUDE.md
+├── requirements.txt
+├── .gitignore
+├── Modelfile               # Ollama model configuration
+├── hgnc_full.txt           # HGNC gene list (auto-downloaded)
+├── src/
+│   ├── scanner.py          # Core pipeline (~2100 lines)
+│   ├── scanner_debug.py    # Fast smoke test (20 abstracts)
+│   ├── llm_qualify.py      # LLM client with SQLite cache
+│   ├── eval_qualify.py     # Accuracy evaluation vs hand labels
+│   ├── generate_report.py  # Post-processing
+│   ├── generate_gene_table.py
+│   └── reformat.py
+├── setup/
+│   ├── install_llm.py      # One-click LLM setup for Windows
+│   ├── install_ollama.py   # Ollama downloader
+│   ├── llm_dll_setup.py    # CUDA DLL preload
+│   └── start_server.py     # LLM server launcher
+├── tools/                  # Diagnostic and benchmark scripts
+└── output/                 # Generated files (gitignored)
+```
+
+## 🧪 Testing
+
+Quick smoke test (20 abstracts, single disorder):
+
+```bash
+python src/scanner_debug.py
 ```
 
 ## 🤝 Credits

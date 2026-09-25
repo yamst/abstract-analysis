@@ -14,7 +14,11 @@ import ssl
 import urllib.request
 
 
-_HGNC_FULL_FILE = os.path.join(os.path.dirname(os.path.abspath(globals().get('__file__', 'scanner.py'))), "hgnc_full.txt")
+# Project root (parent of src/)
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(globals().get('__file__', 'scanner.py'))))
+_HGNC_FULL_FILE = os.path.join(_PROJECT_ROOT, "hgnc_full.txt")
+_OUTPUT_DIR = os.path.join(_PROJECT_ROOT, "output")
+os.makedirs(_OUTPUT_DIR, exist_ok=True)
 _HGNC_FULL_URL  = ("https://www.genenames.org/cgi-bin/download/custom?"
                    "col=gd_app_sym&col=gd_prev_sym&col=gd_aliases"
                    "&status=Approved&hgnc_dbtag=on"
@@ -323,6 +327,12 @@ _DRUG_KW = (
 # If any of these disease-model inducers were administered to animals in the
 # abstract, the whole abstract is excluded from gene-context scoring — the gene
 # changes are a result of the experimental compound, not the disorder itself.
+# LEGACY: Model inducer exclusion code (kept for reference)
+# After expert consultation (2026-09-25), confirmed that chemically-induced disease models
+# (MPTP, 6-OHDA, STZ, poly-I:C, MK-801, scopolamine, cuprizone, kainic acid, etc.) should
+# be INCLUDED as valid disease models. Studies using these compounds to create disease
+# phenotypes in animals are "sick vs control" comparisons, which is what we want.
+# This exclusion logic is intentionally NOT called in production.
 _MODEL_INDUCER_KW = (
     r"poly[\s\-]?i[\s\-:]?c|polyinosinic|polyriboinosinic[\s\-]polyribocytidilic|"
     r"mptp|1[\s\-]methyl[\s\-]4[\s\-]phenyl[\s\-]1,2,3,6[\s\-]tetrahydropyridine|"
@@ -376,7 +386,11 @@ _MI_BARE_RE = re.compile(
 )
 
 def _abstract_uses_model_inducer(text):
-    """Return True if the abstract describes animals administered a model-inducing compound."""
+    """Return True if the abstract describes animals administered a model-inducing compound.
+
+    LEGACY: This function is intentionally NOT called in production. After expert consultation,
+    chemically-induced disease models were confirmed as valid and should NOT be excluded.
+    """
     return bool(
         _MI_ADMIN_RE.search(text)
         or _MI_ADMIN_RE2.search(text)
@@ -1992,7 +2006,7 @@ for disorder, query in _iter_disorders.items():
                     rows.append({"disorder": other_d, **base_row})
 
 df = pd.DataFrame(rows)
-df.to_csv("model_organisms_dataset.csv", index=False)
+df.to_csv(os.path.join(_OUTPUT_DIR, "model_organisms_dataset.csv"), index=False)
 
 # ── Save three text files — one per gene category ─────────────────────────────
 SEP = "=" * 60
@@ -2009,13 +2023,13 @@ def save_as_text(df_sub, gene_col, out_path):
     print(f"Saved {out_path}  ({len(df_sub):,} abstracts)")
 
 df_brain = df[df["brain_genes_found"].str.len() > 0].copy()
-save_as_text(df_brain, "brain_genes_found", "abstracts_brain_genes_context.txt")
+save_as_text(df_brain, "brain_genes_found", os.path.join(_OUTPUT_DIR, "abstracts_brain_genes_context.txt"))
 
 df_gut = df[df["gut_genes_found"].str.len() > 0].copy()
-save_as_text(df_gut, "gut_genes_found", "abstracts_gut_genes_context.txt")
+save_as_text(df_gut, "gut_genes_found", os.path.join(_OUTPUT_DIR, "abstracts_gut_genes_context.txt"))
 
 df_both = df[df["shared_genes_found"].str.len() > 0].copy()
-save_as_text(df_both, "shared_genes_found", "abstracts_shared_genes_context.txt")
+save_as_text(df_both, "shared_genes_found", os.path.join(_OUTPUT_DIR, "abstracts_shared_genes_context.txt"))
 
 # ── All passing abstracts (gene_context=True) in one CSV ──────────────────────
 # Extract publication year from abstract copyright line
@@ -2032,7 +2046,7 @@ df_passing = df[df["gene_context"] == True].copy()
 df_passing["year"] = df_passing["abstract"].apply(_extract_year)
 pass_cols = ["disorder", "year", "tissue", "brain_genes_found", "gut_genes_found",
              "shared_genes_found", "gene_regulation", "abstract"]
-df_passing[pass_cols].to_csv("passing_abstracts.csv", index=False)
+df_passing[pass_cols].to_csv(os.path.join(_OUTPUT_DIR, "passing_abstracts.csv"), index=False)
 print(f"Saved passing_abstracts.csv  ({len(df_passing):,} abstracts that passed all filters)")
 
 # ── Summary file: abstract counts per disorder in the shared file ──────────────
@@ -2042,7 +2056,7 @@ for disorder, count in counts.items():
     summary_lines.append(f"{disorder:<20} {count:>6} abstracts")
 summary_lines.append("=" * 50)
 summary_lines.append(f"{'TOTAL':<20} {counts.sum():>6} abstracts")
-with open("shared_genes_summary.txt", "w", encoding="utf-8") as f:
+with open(os.path.join(_OUTPUT_DIR, "shared_genes_summary.txt"), "w", encoding="utf-8") as f:
     f.write("\n".join(summary_lines))
 print(f"Saved shared_genes_summary.txt")
 
@@ -2177,7 +2191,7 @@ for disorder in DISORDERS:
         fontsize=9)
 
     plt.tight_layout()
-    fname = ("model_organisms_"
+    fname = os.path.join(_OUTPUT_DIR, "model_organisms_"
              + disorder.replace(" ", "_").replace("/", "_").replace("'", "") + ".png")
     plt.savefig(fname, bbox_inches="tight", dpi=150)
     plt.close()
