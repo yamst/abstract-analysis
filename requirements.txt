@@ -4,3 +4,4 @@ matplotlib
 matplotlib-venn
 openpyxl
 httpx
+pytest

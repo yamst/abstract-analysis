@@ -8,6 +8,9 @@ gold_labels.csv
 __pycache__/
 *.py[cod]
 *$py.class
+.pytest_cache/
+*.egg-info/
+.eggs/
 
 # Output directory (regenerate by running scanner.py)
 output/
