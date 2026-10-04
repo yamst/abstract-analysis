@@ -2124,7 +2124,7 @@ other_colors = list(plt.cm.Set2.colors)
 
 print("\nGenerating Diagnostic Plots...")
 for disorder in DISORDERS:
-    data = results[disorder]
+    data = tissue_results[disorder]
     if not data:
         continue
 

@@ -12,11 +12,11 @@ __pycache__/
 # Output directory (regenerate by running scanner.py)
 output/
 
-# Ollama portable install (user installs separately)
+# Ollama portable install (downloaded by setup script, NOT tracked)
 ollama/
 ollama-windows.zip
 
-# Model weights (user pulls via Ollama)
+# Model weights (downloaded by setup script, NOT tracked)
 models/
 ollama-models/
 

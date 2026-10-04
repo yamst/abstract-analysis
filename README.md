@@ -43,11 +43,28 @@ All outputs are saved to `output/`.
 
 ### 🤖 Optional: LLM Qualification Gate
 
-To use the local LLM qualification gate (hybrid approach):
+The LLM qualification gate replaces the regex-based qualification decision with a local LLM judgment. This is a **hybrid**: the LLM only decides qualification; gene extraction, tissue classification, and regulation detection remain regex-based.
+
+#### Setup (one-time after fresh clone)
 
 ```bash
-python setup/install_llm.py          # One-click setup: downloads Ollama + model
-set USE_LLM_QUALIFIER=1              # Enable LLM gate
+python setup/install_ollama.py
+```
+
+This downloads everything needed:
+- Ollama Windows build with CUDA DLLs
+- Qwen2.5-3B-Instruct Q4_K_M model (~2 GB)
+
+#### Run with LLM Gate
+
+```bash
+# Terminal 1: Start the server
+ollama\ollama.exe serve
+
+# Terminal 2: Run scanner
+set USE_LLM_QUALIFIER=1
+set LLM_BASE_URL=http://127.0.0.1:11434
+set LLM_MODEL=qwen2.5-3b-instruct-q4_k_m
 python src/scanner.py
 ```
 
@@ -55,14 +72,28 @@ python src/scanner.py
 
 All outputs are in `output/`:
 
+### scanner.py
 | File | Description |
 |------|-------------|
-| `model_organisms_dataset.csv` | Primary output: one row per abstract×disorder |
-| `passing_abstracts.csv` | Abstracts that passed all filters |
-| `consolidated_gene_table.csv` | Gene counts by disorder |
-| `gene_report.xlsx` | Excel workbook with all results |
-| `venn_diagrams.png` | Brain/gut gene overlap per disorder |
-| `abstracts_*_genes_context.txt` | Full abstracts by gene category |
+| `model_organisms_dataset.csv` | Primary intermediate: one row per abstract×disorder with all metadata |
+| `passing_abstracts.csv` | Abstracts that passed all filters (gene_context=True), with year extracted |
+| `abstracts_brain_genes_context.txt` | Full abstract text for abstracts with brain genes, formatted for review |
+| `abstracts_gut_genes_context.txt` | Full abstract text for abstracts with gut genes, formatted for review |
+| `abstracts_shared_genes_context.txt` | Full abstract text for abstracts with shared brain/gut genes |
+| `shared_genes_summary.txt` | Count per disorder of shared-gene abstracts |
+
+### generate_report.py
+| File | Description |
+|------|-------------|
+| `consolidated_gene_table.csv` | One row per gene×disorder with tissue, paper counts, regulation consensus |
+| `summary_stats.csv` | Per-disorder counts: abstracts, unique genes, shared genes, gene lists |
+| `gene_report.xlsx` | Excel workbook: "Genes" sheet (full table) + "Summary" sheet |
+| `venn_diagrams.png` | 11-panel figure: per-disorder + overall brain/gut gene overlap |
+
+### generate_gene_table.py
+| File | Description |
+|------|-------------|
+| `gene_tissue_table.csv` | Flat table: subject sentence, tissue, disorder, gene (one row per gene mention) |
 
 ## 🔧 Configuration
 
@@ -86,6 +117,11 @@ abstract-analysis/
 ├── .gitignore
 ├── Modelfile               # Ollama model configuration
 ├── hgnc_full.txt           # HGNC gene list (auto-downloaded)
+├── models/                 # Model weights (gitignored)
+│   └── qwen2.5-3b-instruct-q4_k_m.gguf
+├── ollama/                 # Bundled Ollama binaries (tracked)
+│   ├── ollama.exe
+│   └── lib/ollama/...
 ├── src/
 │   ├── scanner.py          # Core pipeline (~2100 lines)
 │   ├── scanner_debug.py    # Fast smoke test (20 abstracts)
@@ -95,10 +131,7 @@ abstract-analysis/
 │   ├── generate_gene_table.py
 │   └── reformat.py
 ├── setup/
-│   ├── install_llm.py      # One-click LLM setup for Windows
-│   ├── install_ollama.py   # Ollama downloader
-│   ├── llm_dll_setup.py    # CUDA DLL preload
-│   └── start_server.py     # LLM server launcher
+│   └── install_ollama.py   # Downloads Ollama from GitHub
 ├── tools/                  # Diagnostic and benchmark scripts
 └── output/                 # Generated files (gitignored)
 ```

@@ -34,7 +34,7 @@ except ImportError as e:
 MODEL_ID          = os.environ.get("LLM_MODEL", "qwen2.5-3b-instruct-q4_k_m")
 PROMPT_VERSION    = os.environ.get("LLM_PROMPT_VERSION", "v1")   # bump to invalidate cache
 LLM_BASE_URL      = os.environ.get("LLM_BASE_URL", "http://127.0.0.1:8080").rstrip("/")
-LLM_CONCURRENCY   = int(os.environ.get("LLM_CONCURRENCY", "8"))
+LLM_CONCURRENCY   = int(os.environ.get("LLM_CONCURRENCY", "4"))
 LLM_MAX_RETRIES   = int(os.environ.get("LLM_MAX_RETRIES", "2"))
 LLM_TIMEOUT       = float(os.environ.get("LLM_TIMEOUT", "60"))
 LLM_CACHE_PATH    = os.environ.get("LLM_CACHE_PATH", "llm_cache.sqlite")
