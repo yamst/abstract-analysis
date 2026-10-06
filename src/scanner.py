@@ -9,11 +9,16 @@ from collections import defaultdict
 import time
 import datetime
 import os
+import hashlib
 import ssl
 import urllib.request
 
 
-_HGNC_FULL_FILE = os.path.join(os.path.dirname(os.path.abspath(globals().get('__file__', 'scanner.py'))), "hgnc_full.txt")
+# Project root (parent of src/)
+_PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(globals().get('__file__', 'scanner.py'))))
+_HGNC_FULL_FILE = os.path.join(_PROJECT_ROOT, "hgnc_full.txt")
+_OUTPUT_DIR = os.path.join(_PROJECT_ROOT, "output")
+os.makedirs(_OUTPUT_DIR, exist_ok=True)
 _HGNC_FULL_URL  = ("https://www.genenames.org/cgi-bin/download/custom?"
                    "col=gd_app_sym&col=gd_prev_sym&col=gd_aliases"
                    "&status=Approved&hgnc_dbtag=on"
@@ -50,6 +55,25 @@ HGNC_SYMBOLS, _HGNC_ALIAS_TO_SYM = _load_hgnc()
 ssl._create_default_https_context = ssl._create_unverified_context
 
 Entrez.email = "dasfour@outlook.com"
+
+
+# ── LLM qualification gate (hybrid mode) ────────────────────────────────────
+# When USE_LLM_QUALIFIER=1, the contextual qualification decision currently inside
+# detect_gene_context (the ~11 _abstract_* exclusion predicates + the disease-model
+# and expression-measurement positive requirements) is replaced by a batched local
+# LLM call (see llm_qualify.py). Gene extraction, per-gene tissue attribution, and
+# regulation direction stay as the cheap HGNC-validated regex below; the LLM only
+# decides has_gene_context. The regex gate in detect_gene_context is retained as the
+# fallback path (server down) and the eval baseline (eval_qualify.py).
+USE_LLM_QUALIFIER = os.environ.get("USE_LLM_QUALIFIER", "0") == "1"
+_llm_qualify_fn = None
+if USE_LLM_QUALIFIER:
+    try:
+        from llm_qualify import qualify_batch_sync as _llm_qualify_fn
+    except Exception as _e:
+        print(f"[warn] USE_LLM_QUALIFIER=1 but llm_qualify unavailable ({_e}); "
+              f"falling back to the regex gate.")
+        USE_LLM_QUALIFIER = False
 
 
 DISORDERS = {
@@ -120,8 +144,9 @@ SPECIES_KEYWORDS = {
     "Humans":     ["human subjects", "human participants", "healthy volunteers",
                    "clinical cohort", "human patients", "human", "humans",
                    "IPSC", "induced pluripotent stem cell", "iPSC",
-                   "brain organoid", "cerebral organoid", "clinical trial"],
-    "Drosophila": ["drosophila", "fruit fly", "drosophila melanogaster"],
+                   "brain organoid", "cerebral organoid", "clinical trial",
+                   "postmortem tissue", "post mortem tissue"],
+    "Drosophila": ["drosophila", "fruit fly", "drosophila melanogaster",],
     "C. elegans": ["c. elegans", "caenorhabditis elegans"],
     "Zebrafish":  ["zebrafish", "danio rerio"],
     "Monkeys":    ["monkey", "monkeys", "macaque", "primate", "non-human primate"],
@@ -302,6 +327,12 @@ _DRUG_KW = (
 # If any of these disease-model inducers were administered to animals in the
 # abstract, the whole abstract is excluded from gene-context scoring — the gene
 # changes are a result of the experimental compound, not the disorder itself.
+# LEGACY: Model inducer exclusion code (kept for reference)
+# After expert consultation (2026-09-25), confirmed that chemically-induced disease models
+# (MPTP, 6-OHDA, STZ, poly-I:C, MK-801, scopolamine, cuprizone, kainic acid, etc.) should
+# be INCLUDED as valid disease models. Studies using these compounds to create disease
+# phenotypes in animals are "sick vs control" comparisons, which is what we want.
+# This exclusion logic is intentionally NOT called in production.
 _MODEL_INDUCER_KW = (
     r"poly[\s\-]?i[\s\-:]?c|polyinosinic|polyriboinosinic[\s\-]polyribocytidilic|"
     r"mptp|1[\s\-]methyl[\s\-]4[\s\-]phenyl[\s\-]1,2,3,6[\s\-]tetrahydropyridine|"
@@ -355,7 +386,11 @@ _MI_BARE_RE = re.compile(
 )
 
 def _abstract_uses_model_inducer(text):
-    """Return True if the abstract describes animals administered a model-inducing compound."""
+    """Return True if the abstract describes animals administered a model-inducing compound.
+
+    LEGACY: This function is intentionally NOT called in production. After expert consultation,
+    chemically-induced disease models were confirmed as valid and should NOT be excluded.
+    """
     return bool(
         _MI_ADMIN_RE.search(text)
         or _MI_ADMIN_RE2.search(text)
@@ -1520,6 +1555,36 @@ def detect_gene_regulation(gene, text):
     if down > 0:             return "Downregulated"
     return "No directional language"
 
+def _regex_prefilter(text):
+    """Cheap regex pre-filter for the LLM qualification path (Option B).
+
+    True iff the abstract is NOT excluded by a confound filter AND has a real
+    disease model AND an expression-measurement signal in the results section.
+    This is exactly parts 1+2 of detect_gene_context; the over-strict 1-3-word
+    proximity heuristic (part 3) is deliberately NOT applied here, so the LLM
+    can rescue papers whose expression signal is phrased without tight
+    gene-term adjacency (the regex's main false-negative source). The cheap
+    bulk-excluders stay so the LLM set stays bounded (~hours, not days).
+    """
+    if (
+        _abstract_uses_therapeutic_drug(text)
+        or _abstract_uses_nondrug_intervention(text)
+        or _abstract_attributes_expression_to_treatment(text)
+        or _abstract_uses_epigenetics(text)
+        or _abstract_is_behavioral_primary(text)
+        or _is_genetic_association_study(text)
+        or _is_computational_study(text)
+        or _is_fluid_only_measurement(text)
+        or _is_blood_cell_line_study(text)
+    ):
+        return False
+    if not _has_disease_model(text):
+        return False
+    if not _EXPRESSION_MEASUREMENT_RE.search(_get_results_section(text)):
+        return False
+    return True
+
+
 def detect_gene_context(text, mentioned_genes):
     """Return True when a regulation/expression term is within 1–3 words of
     'gene'/'genes' or a detected gene name, measured from the *actual* regex
@@ -1536,23 +1601,9 @@ def detect_gene_context(text, mentioned_genes):
     Examples that fail:  'protein expression', 'respective protein expression',
                          'genes have been associated with their respective protein expression'
     """
-    # Abstract-level exclusion
-    if (
-        _abstract_uses_therapeutic_drug(text)
-        or _abstract_uses_nondrug_intervention(text)
-        or _abstract_attributes_expression_to_treatment(text)
-        or _abstract_uses_epigenetics(text)
-        or _abstract_is_behavioral_primary(text)
-        or _is_genetic_association_study(text)
-        or _is_computational_study(text)
-        or _is_fluid_only_measurement(text)
-        or _is_blood_cell_line_study(text)
-    ):
-        return False
-    # Positive requirements
-    if not _has_disease_model(text):
-        return False
-    if not _EXPRESSION_MEASUREMENT_RE.search(_get_results_section(text)):
+    # Abstract-level exclusion + positive requirements (parts 1+2). Shared with
+    # _regex_prefilter so the regex fallback and the LLM pre-filter never diverge.
+    if not _regex_prefilter(text):
         return False
 
     # Combine 'gene'/'genes', detected gene symbols, AND their common-name aliases
@@ -1700,8 +1751,10 @@ _API_KEY = os.environ.get("NCBI_API_KEY", None)
 _SLEEP = 0.11 if _API_KEY else 0.34
 if _API_KEY: Entrez.api_key = _API_KEY
 
-DEBUG_YEAR_START = 2000   # set to 2000 for full run
-DEBUG_PER_YEAR   = None   # full run — no limit per year
+DEBUG_YEAR_START = int(os.environ.get("DEBUG_YEAR_START", "2000"))   # full run = 2000
+DEBUG_PER_YEAR   = os.environ.get("DEBUG_PER_YEAR")                  # None = no cap per year
+if DEBUG_PER_YEAR is not None:
+    DEBUG_PER_YEAR = int(DEBUG_PER_YEAR)
 
 def fetch_abstracts(query, batch_size=500):
     current_year = datetime.datetime.now().year
@@ -1780,7 +1833,10 @@ brain_gene_pool   = defaultdict(set)   # genes from brain-tissue + gene-context 
 gut_gene_pool     = defaultdict(set)   # genes from gut-tissue  + gene-context abstracts
 rows              = []
 
-for disorder, query in DISORDERS.items():
+_debug_dis = os.environ.get("DEBUG_DISORDERS")  # comma-sep disorder names -> restrict (testing)
+_iter_disorders = ({d: DISORDERS[d] for d in [s.strip() for s in _debug_dis.split(",")] if d in DISORDERS}
+                   if _debug_dis else DISORDERS)
+for disorder, query in _iter_disorders.items():
     print(f"\nProcessing {disorder}…")
     fq = (f"{query} AND 2000:3000[dp] "
           f"NOT (clinical trial[pt] OR randomized controlled trial[pt] "
@@ -1788,8 +1844,14 @@ for disorder, query in DISORDERS.items():
     abstracts = fetch_abstracts(fq)
 
     # ── Pass 1: build tissue + gene-context pools ─────────────────────────────
+    # Three-phase split so the expensive LLM qualification call can be batched per
+    # disorder (continuous batching) instead of firing sequentially per abstract.
     disorder_data = []
     seen_pmids = set()
+    collected = []   # (item_id, abstract, body, tissue, has_gene_omics, has_micro, mentioned, prefilter_pass)
+
+    # Phase A — cheap per-abstract regex features (no LLM). Tallies that are
+    # independent of has_gene_context are updated here, exactly as before.
     for abstract in abstracts:
         # Deduplicate by PMID within this disorder
         pmid_m = re.search(r'\bPMID:\s*(\d+)', abstract)
@@ -1798,25 +1860,65 @@ for disorder, query in DISORDERS.items():
             if pmid in seen_pmids:
                 continue
             seen_pmids.add(pmid)
+            item_id = pmid
+        else:
+            # Stable id for records without a PMID line (cache key still valid).
+            item_id = "b:" + hashlib.sha256(abstract.encode()).hexdigest()[:16]
 
-        body             = _strip_pubmed_header(abstract)
+        body = _strip_pubmed_header(abstract)
 
-        # Skip long-term depression (LTD) papers misattributed to Major Depression
+        # Skip long-term depression (LTD) papers misattributed to Major Depression.
+        # (Disorder-specific cheap pre-filter; kept before the disorder-agnostic gate.)
         if _abstract_is_ltd_not_mdd(body, disorder):
             continue
 
-        tissue           = detect_tissue(body)
-        has_gene_omics   = detect_gene_expr(body)
-        has_micro        = detect_microbiome(body)
-        mentioned        = detect_mentioned_genes(body)
-        has_gene_context = detect_gene_context(body, mentioned)
+        tissue          = detect_tissue(body)
+        has_gene_omics  = detect_gene_expr(body)
+        has_micro       = detect_microbiome(body)
+        mentioned       = detect_mentioned_genes(body)
+        prefilter_pass  = _regex_prefilter(body)   # cheap gate; LLM only sees passes (Option B)
 
         disorder_genes[disorder].update(mentioned)
         if has_gene_omics:  gene_expr_counts[disorder]  += 1
         if has_micro:       microbiome_counts[disorder] += 1
         for g in mentioned: gene_mention[disorder][g] += 1
 
-        # Tissue tracking: split each tissue type into gene-context vs other
+        collected.append((item_id, abstract, body, tissue, has_gene_omics, has_micro, mentioned, prefilter_pass))
+
+    # Phase B — batched qualification. LLM if enabled; otherwise (or on failure)
+    # judgments stays None and Phase C falls back to the regex gate per abstract.
+    # Option B: the LLM only judges pre-filter-passing abstracts (it replaces the
+    # over-strict proximity heuristic on a bounded set), so the full fetch is not
+    # LLM-judged — keeps the run to hours, not days.
+    judgments = None
+    if USE_LLM_QUALIFIER and _llm_qualify_fn is not None:
+        items = [(iid, body, sorted(mentioned))
+                 for (iid, _abs, body, _tis, _go, _mi, mentioned, pf) in collected if pf]
+        print(f"[{disorder}] pre-filter {len(items)}/{len(collected)} -> LLM "
+              f"(~{len(items)/19/60:.1f}h est @19 abstracts/min)")
+        try:
+            judgments = _llm_qualify_fn(items)
+        except Exception as _e:
+            print(f"[warn] LLM batch failed for {disorder} ({_e}); using regex gate.")
+            judgments = None
+
+    # Phase C — per-abstract gene-pool / tissue / regulation using the qualification
+    # verdict. has_gene_context comes from the LLM (or the regex fallback); everything
+    # downstream (tissue tally, per-gene tissue, the tissue-gene downgrade, multi-disorder
+    # attribution, the appended tuple) runs identically to the original.
+    for (item_id, abstract, body, tissue, has_gene_omics, has_micro, mentioned, prefilter_pass) in collected:
+        if prefilter_pass and judgments is not None and item_id in judgments:
+            has_gene_context = judgments[item_id].qualifies
+        elif prefilter_pass:
+            # LLM unavailable/failed for this disorder: fall back to the full
+            # regex gate (incl. proximity) — identical to the pre-LLM behaviour.
+            has_gene_context = detect_gene_context(body, mentioned)
+        else:
+            # Failed the cheap pre-filter (excluded confound / no disease model /
+            # no expression signal) -> never qualifies; skips the LLM entirely.
+            has_gene_context = False
+
+        # Tissue tracking: split each tissue type into gene-context vs other (PRE-downgrade)
         if tissue != "Other":
             gc_tag = " (gene ctx)" if has_gene_context else " (other)"
             tissue_results[disorder][tissue + gc_tag] += 1
@@ -1844,9 +1946,9 @@ for disorder, query in DISORDERS.items():
         is_gut_gc   = bool(genes_in_gut)
 
         # Require at least one gene attributable to brain or gut tissue.
-        # Papers where gene expression is measured only in fluids (blood, serum, CSF)
-        # or other non-tissue sources will have gene_context=True but empty gene sets —
-        # downgrade them so they don't appear in passing_abstracts.csv.
+        # (Safety net: the LLM may qualify a serum-BDNF paper; the deterministic
+        # per-gene tissue check finds no brain/gut gene and flips it False, so
+        # fluid-only studies stay excluded exactly as under the regex gate.)
         if has_gene_context and not is_brain_gc and not is_gut_gc:
             has_gene_context = False
 
@@ -1904,7 +2006,7 @@ for disorder, query in DISORDERS.items():
                     rows.append({"disorder": other_d, **base_row})
 
 df = pd.DataFrame(rows)
-df.to_csv("model_organisms_dataset.csv", index=False)
+df.to_csv(os.path.join(_OUTPUT_DIR, "model_organisms_dataset.csv"), index=False)
 
 # ── Save three text files — one per gene category ─────────────────────────────
 SEP = "=" * 60
@@ -1921,13 +2023,13 @@ def save_as_text(df_sub, gene_col, out_path):
     print(f"Saved {out_path}  ({len(df_sub):,} abstracts)")
 
 df_brain = df[df["brain_genes_found"].str.len() > 0].copy()
-save_as_text(df_brain, "brain_genes_found", "abstracts_brain_genes_context.txt")
+save_as_text(df_brain, "brain_genes_found", os.path.join(_OUTPUT_DIR, "abstracts_brain_genes_context.txt"))
 
 df_gut = df[df["gut_genes_found"].str.len() > 0].copy()
-save_as_text(df_gut, "gut_genes_found", "abstracts_gut_genes_context.txt")
+save_as_text(df_gut, "gut_genes_found", os.path.join(_OUTPUT_DIR, "abstracts_gut_genes_context.txt"))
 
 df_both = df[df["shared_genes_found"].str.len() > 0].copy()
-save_as_text(df_both, "shared_genes_found", "abstracts_shared_genes_context.txt")
+save_as_text(df_both, "shared_genes_found", os.path.join(_OUTPUT_DIR, "abstracts_shared_genes_context.txt"))
 
 # ── All passing abstracts (gene_context=True) in one CSV ──────────────────────
 # Extract publication year from abstract copyright line
@@ -1944,7 +2046,7 @@ df_passing = df[df["gene_context"] == True].copy()
 df_passing["year"] = df_passing["abstract"].apply(_extract_year)
 pass_cols = ["disorder", "year", "tissue", "brain_genes_found", "gut_genes_found",
              "shared_genes_found", "gene_regulation", "abstract"]
-df_passing[pass_cols].to_csv("passing_abstracts.csv", index=False)
+df_passing[pass_cols].to_csv(os.path.join(_OUTPUT_DIR, "passing_abstracts.csv"), index=False)
 print(f"Saved passing_abstracts.csv  ({len(df_passing):,} abstracts that passed all filters)")
 
 # ── Summary file: abstract counts per disorder in the shared file ──────────────
@@ -1954,7 +2056,7 @@ for disorder, count in counts.items():
     summary_lines.append(f"{disorder:<20} {count:>6} abstracts")
 summary_lines.append("=" * 50)
 summary_lines.append(f"{'TOTAL':<20} {counts.sum():>6} abstracts")
-with open("shared_genes_summary.txt", "w", encoding="utf-8") as f:
+with open(os.path.join(_OUTPUT_DIR, "shared_genes_summary.txt"), "w", encoding="utf-8") as f:
     f.write("\n".join(summary_lines))
 print(f"Saved shared_genes_summary.txt")
 
@@ -2022,7 +2124,7 @@ other_colors = list(plt.cm.Set2.colors)
 
 print("\nGenerating Diagnostic Plots...")
 for disorder in DISORDERS:
-    data = results[disorder]
+    data = tissue_results[disorder]
     if not data:
         continue
 
@@ -2089,7 +2191,7 @@ for disorder in DISORDERS:
         fontsize=9)
 
     plt.tight_layout()
-    fname = ("model_organisms_"
+    fname = os.path.join(_OUTPUT_DIR, "model_organisms_"
              + disorder.replace(" ", "_").replace("/", "_").replace("'", "") + ".png")
     plt.savefig(fname, bbox_inches="tight", dpi=150)
     plt.close()
