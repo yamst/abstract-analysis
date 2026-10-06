@@ -1,10 +1,25 @@
+# LLM qualifier cache (resume-safe; regenerate by re-running the gate)
+llm_cache.sqlite*
+
+# Gold eval set is hand-labeled local data
+gold_labels.csv
+
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
 
-*.csv
-*.xlsx
-CLAUDE.md
+# Output directory (regenerate by running scanner.py)
+output/
 
-hgnc_full.txt
-venn_diagrams.png
+# Ollama portable install (downloaded by setup script, NOT tracked)
+ollama/
+ollama-windows.zip
+
+# Model weights (downloaded by setup script, NOT tracked)
+models/
+ollama-models/
+
+# Backup files
+*.bak
+*.test_bak

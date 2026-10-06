@@ -1,4 +1,4 @@
-import re, time, datetime, os, ssl, socket
+import re, time, datetime, os, ssl, socket, hashlib
 import urllib.request
 from Bio import Entrez
 from collections import defaultdict
@@ -758,6 +758,37 @@ if __name__ == "__main__":
 
     abstracts = fetch_small_batch(DEBUG_QUERY, DEBUG_YEAR, DEBUG_N)
     print(f"Fetched {len(abstracts)} abstracts.\n")
+
+    # ── Optional LLM-gate smoke test ─────────────────────────────────────────
+    # USE_LLM_GATE=1 bypasses the verbose sentence trace and instead batch-qualifies
+    # the abstracts through llm_qualify (the same gate the production scanner uses),
+    # so you can eyeball the LLM's qualifies/reason/tissue_hint on a tiny fetch.
+    if os.environ.get("USE_LLM_GATE", "0") == "1":
+        try:
+            from llm_qualify import qualify_batch_sync
+        except Exception as e:
+            print(f"llm_qualify unavailable ({e}); set USE_LLM_GATE=0 to use the trace.")
+            raise SystemExit
+        items = []
+        for i, abstract in enumerate(abstracts):
+            body = _strip_pubmed_header(abstract)
+            mentioned = detect_mentioned_genes(body, ALL_CANDIDATE_GENES)
+            pmid_m = re.search(r'\bPMID:\s*(\d+)', abstract)
+            iid = (pmid_m.group(1) if pmid_m
+                   else f"dbg{i}:" + hashlib.sha256(body.encode()).hexdigest()[:16])
+            items.append((iid, body, sorted(mentioned)))
+        judgments = qualify_batch_sync(items)
+        print(f"{'─'*70}\nLLM gate — {len(judgments)} judgments:\n{'─'*70}")
+        for i, (iid, _body, _mg) in enumerate(items):
+            title = (abstracts[i].strip().split("\n")[1]
+                     if len(abstracts[i].strip().split("\n")) > 1 else "")
+            j = judgments.get(iid)
+            if j:
+                print(f"#{i+1} qualifies={j.qualifies}  tissue_hint={j.tissue_hint}\n"
+                      f"   reason: {j.reason}\n   title: {title.strip()}\n")
+            else:
+                print(f"#{i+1} (no judgment)\n")
+        raise SystemExit
 
     for i, abstract in enumerate(abstracts):
         title_line = abstract.strip().split("\n")[1] if len(abstract.strip().split("\n")) > 1 else ""
