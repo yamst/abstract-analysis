@@ -53,4 +53,7 @@ result = result.sort_values(["disorder", "tissue", "gene", "subject"]).reset_ind
 
 result.to_csv(os.path.join(_OUTPUT_DIR, "gene_tissue_table.csv"), index=False)
 print(f"Saved gene_tissue_table.csv — {len(result):,} rows, {result['gene'].nunique()} unique genes")
-print(result.head(10).to_string(index=False))
+try:
+    print(result.head(10).to_string(index=False))
+except UnicodeEncodeError:
+    print("(first 10 rows contain non-ASCII characters; see CSV for full output)")

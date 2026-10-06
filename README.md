@@ -161,4 +161,5 @@ Built with 🧡 using Claude Code by Anthropic
 
 ## 📝 Note for Future Improvements
 
-> Possibly good idea to add direct disorder check.
+> Read KNOWN_ISSUES.txt
+
